@@ -1,0 +1,115 @@
+    1  nmcli connection show
+    2  nmcli connection modify enp0s3 ipv4.method manual
+    3  nmcli connection modify enp0s3 ipv4.method manual ipv4.addresses 192.168.1.100/24 ipv4.gateway 192.168.1.1 ipv4.dns 8.8.8.8
+    4  nmcli connection up enp0s3
+    5  echo "Статический IP настроен: 192.168.1.100/24"
+    6  hostnamectl set-hostname mephi-2026.domain.local
+    7  echo "Hostname установлен: $(hostnamectl --static)"
+    8  echo ""
+    9  echo ">>> РАЗДЕЛ 1.2: Проверка сетевой связности"
+   10  echo "Маршрут по умолчанию:"
+   11  ip route show default
+   12  ping -c 4 8.8.8.8 > /tmp/network_check.txt 2>&1 || true
+   13  ping -c 4 192.168.1.1 >> /tmp/network_check.txt 2>&1 || true
+   14  echo "Результаты сохранены в /tmp/network_check.txt"
+   15  cat /tmp/network_check.txt
+   16  echo ""
+   17  echo ">>> РАЗДЕЛ 2.1: Установка пакетов из репозиториев"
+   18  dnf install -y nginx tcpdump libcap-ng-utils
+   19  echo "Пакеты nginx, tcpdump, libcap-ng-utils установлены"
+   20  echo ""
+   21  echo ">>> РАЗДЕЛ 2.2: Установка локального RPM-пакета"
+   22  dnf download tcpdump --destdir=/tmp
+   23  TCPDUMP_RPM=$(ls /tmp/tcpdump-*.rpm 2>/dev/null | head -1)
+   24  echo "Скачан RPM: $TCPDUMP_RPM"
+   25  rpm -ivh --force "$TCPDUMP_RPM"
+   26  echo "RPM-пакет tcpdump установлен через rpm"
+   27  echo ""
+   28  echo ">>> РАЗДЕЛ 3.1: Создание и монтирование файловой системы"
+   29  echo -e "o\nn\np\n1\n\n\nw" | fdisk /dev/sdb
+   30  mkfs.ext4 -L MEPHI_DATA /dev/sdb1
+   31  mkdir -p /data/mephi-web
+   32  if ! grep -q "LABEL=MEPHI_DATA" /etc/fstab; then     echo "LABEL=MEPHI_DATA  /data/mephi-web  ext4  defaults  0  2" >> /etc/fstab; fi
+   33  mount -a
+   34  systemctl daemon-reload
+   35  df -h /data/mephi-web
+   36  echo ""
+   37  echo "Содержимое /etc/fstab:"
+   38  cat /etc/fstab
+   39  echo ""
+   40  echo ">>> РАЗДЕЛ 3.2: Управление сервисами и журналирование"
+   41  systemctl start nginx
+   42  systemctl enable nginx
+   43  echo "Статус nginx:"
+   44  systemctl status nginx --no-pager
+   45  journalctl -u nginx --since "5 minutes ago" --no-pager > /tmp/nginx_recent_logs.txt
+   46  echo "Логи nginx сохранены в /tmp/nginx_recent_logs.txt"
+   47  echo ""
+   48  echo ">>> РАЗДЕЛ 4.1: Дискреционное управление доступом (DAC)"
+   49  useradd -m mephi-admin 2>/dev/null || echo "Пользователь mephi-admin уже существует"
+   50  echo "mephi-admin:P@ssw0rd2026" | chpasswd
+   51  groupadd mephi-devs 2>/dev/null || echo "Группа mephi-devs уже существует"
+   52  usermod -aG mephi-devs mephi-admin
+   53  chown mephi-admin:mephi-devs /data/mephi-web
+   54  chmod 2775 /data/mephi-web
+   55  echo "Проверка прав:"
+   56  ls -ld /data/mephi-web
+   57  echo "Проверка пользователя:"
+   58  id mephi-admin
+   59  echo ""
+   60  echo ">>> РАЗДЕЛ 4.2: Мандатное управление доступом (MAC) и Capabilities"
+   61  echo "Текущий режим SELinux: $(getenforce)"
+   62  if [ "$(getenforce)" != "Enforcing" ]; then     setenforce 1
+    sed -i 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config;     echo "SELinux переключён в Enforcing"; fi
+   63  semanage fcontext -a -t httpd_sys_content_t "/data/mephi-web(/.*)?"
+   64  restorecon -Rv /data/mephi-web
+   65  echo "SELinux-контекст установлен:"
+   66  ls -Zd /data/mephi-web
+   67  chmod u-s /usr/sbin/tcpdump
+   68  setcap 'cap_net_raw,cap_net_admin+ep' /usr/sbin/tcpdump
+   69  echo "Capabilities для tcpdump:"
+   70  getcap /usr/sbin/tcpdump
+   71  echo "Проверка запуска tcpdump от mephi-admin:"
+   72  sudo -u mephi-admin tcpdump --help 2>&1 | head -3
+   73  echo ""
+   74  echo ">>> РАЗДЕЛ 5.1: Ограничение входа для root"
+   75  echo "root" > /etc/ssh/denied_users
+   76  if ! grep -q "pam_listfile.so.*denied_users" /etc/pam.d/sshd; then     sed -i '1 a auth    required    pam_listfile.so  onerr=succeed  item=user  sense=deny  file=/etc/ssh/denied_users' /etc/pam.d/sshd; fi
+   77  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+   78  systemctl restart sshd
+   79  if ! grep -q "pam_listfile.so.*denied_users" /etc/pam.d/login; then     sed -i '1 a auth    required    pam_listfile.so  onerr=succeed  item=user  sense=deny  file=/etc/ssh/denied_users' /etc/pam.d/login; fi
+   80  echo "Root-логин заблокирован через PAM для SSH и локальной консоли"
+   81  echo ""
+   82  echo ">>> РАЗДЕЛ 5.2: Создание персонифицированной страницы"
+   83  sudo -u mephi-admin bash -c 'echo "Hello from Student: 370797" > /data/mephi-web/index.html'
+   84  echo "index.html создан:"
+   85  cat /data/mephi-web/index.html
+   86  cat > /etc/nginx/conf.d/mephi-web.conf << 'NGINX_CONF'
+server {
+    listen       80;
+    server_name  localhost 192.168.1.100 mephi-2026.domain.local;
+ 
+    root /data/mephi-web;
+    index index.html;
+ 
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+NGINX_CONF
+
+   87  sed -i 's|root.*/usr/share/nginx/html;|root /data/mephi-web;|g' /etc/nginx/nginx.conf 2>/dev/null || true
+   88   
+   89  nginx -t
+   90  systemctl restart nginx
+   91  restorecon -Rv /data/mephi-web
+   92  echo ""
+   93  echo ">>> РАЗДЕЛ 5.2.2: Итоговая проверка доступности"
+   94  echo "--- curl http://localhost ---"
+   95  curl -s http://localhost
+   96  echo ""
+   97  echo "--- curl http://192.168.1.100 ---"
+   98  curl -s http://192.168.1.100
+   99  echo ">>> РАЗДЕЛ 6: Сбор артефактов"
+  100  cd ~
+  101  history > ~/project_history.txt

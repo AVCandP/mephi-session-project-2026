@@ -1,0 +1,627 @@
+================================================================================
+ОТЧЁТ ПО ПРОЕКТУ: Настройка рабочей станции Fedora 43
+Курс: Операционные системы UNIX
+Номер зачётной книжки: 370797
+ФИО: Власов А.И.
+Система: Fedora Linux 43 (Server Edition)
+Ядро: 6.19.9-200.fc43.x86_64
+Среда виртуализации: Oracle VirtualBox 7.x на Windows
+================================================================================
+
+
+=== 0. ПОДГОТОВКА СРЕДЫ ===
+
+Установлена минимальная Fedora 43 Server Edition на VirtualBox.
+Параметры VM: 2 CPU, 4 ГБ RAM, диск 20 ГБ (sda), второй диск 5 ГБ (sdb).
+Сетевой адаптер: Сетевой мост (Bridged Adapter), Realtek PCIe GbE.
+
+--- Первый вход через консоль VirtualBox ---
+
+Fedora Linux 43 (Server Edition)
+Kernel 6.19.9-200.fc43.x86_64 on x86_64 (tty1)
+
+Web console: https://localhost:9090/ or https://192.168.1.78:9090/
+
+localhost login: root
+Password:
+
+--- Проверка начального IP (получен по DHCP) ---
+
+root@localhost:~# ip addr show
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host noprefixroute
+       valid_lft forever preferred_lft forever
+2: enp0s3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
+    link/ether 08:00:27:8c:b1:6d brd ff:ff:ff:ff:ff:ff
+    altname enx0800278cb16d
+    inet 192.168.1.78/24 brd 192.168.1.255 scope global dynamic noprefixroute enp0s3
+       valid_lft 24609sec preferred_lft 24609sec
+    inet6 fe80:a800:27ff:fe8c:b16d/64 scope link noprefixroute
+       valid_lft forever preferred_lft forever
+
+
+=== 0.1. НАСТРОЙКА SSH-ДОСТУПА (предварительная) ===
+
+Попытка подключиться через PuTTY к 192.168.1.78:22 — ошибка:
+
+    login as: root
+    root@192.168.1.78's password:
+    Access denied
+    root@192.168.1.78's password:
+    Access denied
+    root@192.168.1.78's password:
+    Access denied
+
+Причина: в Fedora 43 Server по умолчанию PermitRootLogin prohibit-password.
+
+--- Диагностика через консоль VirtualBox ---
+
+root@localhost:~# cat /etc/ssh/sshd_config | grep PermitRootLogin
+#PermitRootLogin prohibit-password
+# the setting of "PermitRootLogin prohibit-password".
+
+--- Первая попытка исправить через sed (неуспешная) ---
+
+root@localhost:~# sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+root@localhost:~# systemctl restart sshd
+root@localhost:~# sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+root@localhost:~# systemctl restart sshd
+root@localhost:~# cat /etc/ssh/sshd_config | grep PermitRootLogin
+#PermitRootLogin prohibit-password
+# the setting of "PermitRootLogin prohibit-password".
+
+Строка не изменилась — sed не отработал, т.к. регулярное выражение не совпало
+с форматом строки (пробелы/табуляция в комментарии).
+
+--- Решение: добавить строку в конец файла ---
+
+root@localhost:~# echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+root@localhost:~# systemctl restart sshd
+root@localhost:~# cat /etc/ssh/sshd_config | grep PermitRootLogin
+#PermitRootLogin prohibit-password
+# the setting of "PermitRootLogin prohibit-password".
+PermitRootLogin yes
+
+Строка PermitRootLogin yes добавлена в конец и перекрывает закомментированную.
+
+--- Повторное подключение через PuTTY: УСПЕШНО ---
+
+    login as: root
+    root@192.168.1.78's password:
+
+    Web console: https://localhost:9090/ or https://192.168.1.78:9090/
+
+    [root@localhost ~]#
+
+
+================================================================================
+=== РАЗДЕЛ 1. УПРАВЛЕНИЕ СЕТЬЮ  ===
+================================================================================
+
+=== 1.1. Настройка статического IP и hostname  ===
+
+[root@localhost ~]# nmcli connection show
+NAME    UUID                                  TYPE      DEVICE
+enp0s3  fcbb5577-9b75-385f-b431-6f1f0c0118d7  ethernet  enp0s3
+lo      32969d51-5225-4a77-bdb9-a03987b25538  loopback  lo
+
+--- Первая попытка (ошибка) ---
+
+[root@localhost ~]# nmcli connection modify enp0s3 ipv4.method manual
+Ошибка: не удалось изменить подключение «enp0s3»: ipv4.method: method 'manual' requires at least an address or a route
+
+--- Исправление: задать все параметры одной командой ---
+
+[root@localhost ~]# nmcli connection modify enp0s3 ipv4.method manual ipv4.addresses 192.168.1.100/24 ipv4.gateway 192.168.1.1 ipv4.dns 8.8.8.8
+[root@localhost ~]# nmcli connection up enp0s3
+
+Соединение оборвалось (IP сменился с .78 на .100).
+Переподключение PuTTY к 192.168.1.100 — успешно.
+
+--- Установка hostname ---
+
+[root@localhost ~]# hostnamectl set-hostname mephi-2026.domain.local
+[root@localhost ~]# hostnamectl
+   Static hostname: mephi-2026.domain.local
+         Icon name: computer-vm
+           Chassis: vm
+        Machine ID: ...
+           Boot ID: ...
+  Operating System: Fedora Linux 43 (Server Edition)
+       CPE OS Name: cpe:/o:fedoraproject:fedora:43
+            Kernel: Linux 6.19.9-200.fc43.x86_64
+      Architecture: x86-64
+
+
+=== 1.2. Проверка сетевой связности  ===
+
+[root@localhost ~]# ip route show default
+default via 192.168.1.1 dev enp0s3 proto static metric 100
+
+[root@localhost ~]# ping -c 4 192.168.1.1 > /tmp/network_check.txt
+[root@localhost ~]# ping -c 4 8.8.8.8 >> /tmp/network_check.txt
+[root@localhost ~]# cat /tmp/network_check.txt
+
+PING 192.168.1.1 (192.168.1.1) 56(84) bytes of data.
+64 bytes from 192.168.1.1: icmp_seq=1 ttl=64 time=6.97 ms
+64 bytes from 192.168.1.1: icmp_seq=2 ttl=64 time=0.951 ms
+64 bytes from 192.168.1.1: icmp_seq=3 ttl=64 time=1.04 ms
+64 bytes from 192.168.1.1: icmp_seq=4 ttl=64 time=0.874 ms
+
+--- 192.168.1.1 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3128ms
+rtt min/avg/max/mdev = 0.874/2.458/6.971/2.606 ms
+PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.
+64 bytes from 8.8.8.8: icmp_seq=1 ttl=107 time=10.6 ms
+64 bytes from 8.8.8.8: icmp_seq=2 ttl=107 time=9.49 ms
+64 bytes from 8.8.8.8: icmp_seq=3 ttl=107 time=9.77 ms
+64 bytes from 8.8.8.8: icmp_seq=4 ttl=107 time=9.64 ms
+
+--- 8.8.8.8 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3169ms
+rtt min/avg/max/mdev = 9.492/9.866/10.563/0.414 ms
+
+Результат: связь с шлюзом 192.168.1.1 и внешним DNS 8.8.8.8 — 0% потерь.
+
+
+================================================================================
+=== РАЗДЕЛ 2. УПРАВЛЕНИЕ ПРОГРАММНЫМ ОБЕСПЕЧЕНИЕМ  ===
+================================================================================
+
+=== 2.1. Установка пакетов из репозиториев  ===
+
+[root@localhost ~]# dnf install -y nginx tcpdump libcap-ng-utils
+
+Репозитории загружены.
+Пакет "tcpdump-14:4.99.6-2.fc43.x86_64" уже установлен.
+
+Пакет                       Арх.    Версия              Репозитори  Размер
+Установка:
+ libcap-ng-utils            x86_64  0.9.2-1.fc43        updates     1.0 MiB
+ nginx                      x86_64  2:1.28.2-1.fc43     updates     119.4 KiB
+Установка зависимостей:
+ fedora-logos-httpd          noarch  42.0.1-2.fc43       fedora      12.1 KiB
+ gperftools-libs             x86_64  2.17.2-1.fc43       fedora      1.2 MiB
+ libunwind                   x86_64  1.8.1-3.fc43        fedora      194.1 KiB
+ nginx-core                  x86_64  2:1.28.2-1.fc43     updates     1.8 MiB
+ nginx-filesystem            noarch  2:1.28.2-1.fc43     updates     141.0   B
+ nginx-mimetypes             noarch  2.1.54-9.fc43       fedora      46.6 KiB
+Установка слабых зависимостей:
+ julietaula-montserrat-fonts noarch  1:9.000-3.fc43      fedora      5.6 MiB
+
+Сводка транзакции:
+ Установка:       9 пакетов
+
+Установлено.
+
+
+=== 2.2. Установка локального RPM-пакета  ===
+
+[root@localhost ~]# dnf download tcpdump --destdir=/tmp
+tcpdump-4.99.6-2.fc43.x86_64.rpm                     515 kB/s | 516 kB     00:01
+
+[root@localhost ~]# TCPDUMP_RPM=$(ls /tmp/tcpdump-*.rpm 2>/dev/null | head -1)
+[root@localhost ~]# echo "Скачан RPM: $TCPDUMP_RPM"
+Скачан RPM: /tmp/tcpdump-4.99.6-2.fc43.x86_64.rpm
+
+[root@localhost ~]# rpm -ivh --force "$TCPDUMP_RPM"
+Предупреждение: /tmp/tcpdump-4.99.6-2.fc43.x86_64.rpm: Заголовок V4 RSA/SHA256 Signature, key ID a15b79cc: NOKEY
+Verifying...                          ################################# [100%]
+Подготовка...                         ################################# [100%]
+Обновление / установка...
+   1:tcpdump-14:4.99.6-2.fc43        ################################# [100%]
+
+
+================================================================================
+=== РАЗДЕЛ 3. УПРАВЛЕНИЕ ФАЙЛОВЫМИ СИСТЕМАМИ И СЕРВИСАМИ  ===
+================================================================================
+
+=== 3.1. Создание и монтирование файловой системы  ===
+
+Предварительно: в VirtualBox был добавлен второй виртуальный диск 5 ГБ (VDI).
+
+[root@localhost ~]# echo -e "o\nn\np\n1\n\n\nw" | fdisk /dev/sdb
+
+Welcome to fdisk (util-linux 2.41.3).
+Changes will remain in memory only, until you decide to write them.
+Be careful before using the write command.
+
+Device does not contain a recognized partition table.
+Created a new DOS (MBR) disklabel with disk identifier 0xc91c6372.
+
+Command (m for help): Created a new DOS (MBR) disklabel with disk identifier 0xffdc0eb9.
+
+Command (m for help): Partition type
+   p   primary (0 primary, 0 extended, 4 free)
+   e   extended (container for logical partitions)
+Select (default p): Partition number (1-4, default 1): First sector (2048-10485759, default 2048): Last s
+/-size{K,M,G,T,P} (2048-10485759, default 10485759):
+Created a new partition 1 of type 'Linux' and of size 5 GiB.
+
+Command (m for help): The partition table has been altered.
+Calling ioctl() to re-read partition table.
+Syncing disks.
+
+[root@localhost ~]# mkfs.ext4 -L MEPHI_DATA /dev/sdb1
+mke2fs 1.47.3 (8-Jul-2025)
+Creating filesystem with 1310464 4k blocks and 327680 inodes
+Filesystem UUID: 97663a91-7db8-4f00-abfa-edf4aa4b7883
+Superblock backups stored on blocks:
+        32768, 98304, 163840, 229376, 294912, 819200, 884736
+
+Allocating group tables: done
+Writing inode tables: done
+Creating journal (16384 blocks): done
+Writing superblocks and filesystem accounting information: done
+
+[root@localhost ~]# mkdir -p /data/mephi-web
+
+[root@localhost ~]# if ! grep -q "LABEL=MEPHI_DATA" /etc/fstab; then
+    echo "LABEL=MEPHI_DATA  /data/mephi-web  ext4  defaults  0  2" >> /etc/fstab
+fi
+
+[root@localhost ~]# mount -a
+mount: (hint) your fstab has been modified, but systemd still uses
+       the old version; use 'systemctl daemon-reload' to reload.
+
+[root@localhost ~]# systemctl daemon-reload
+
+[root@localhost ~]# df -h /data/mephi-web
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdb1       4.9G   24K  4.6G   1% /data/mephi-web
+
+--- Содержимое /etc/fstab ---
+
+[root@localhost ~]# cat /etc/fstab
+
+#
+# /etc/fstab
+# Created by anaconda on Sat Mar 28 10:24:44 2026
+#
+# Accessible filesystems, by reference, are maintained under '/dev/disk/'.
+# See man pages fstab(5), findfs(8), mount(8) and/or blkid(8) for more info.
+#
+# After editing this file, run 'systemctl daemon-reload' to update systemd
+# units generated from this file.
+#
+UUID=166fd6f0-7c6b-4e4e-93ea-1be25d67e5d1 / xfs defaults 0 0
+UUID=5ddbf529-ee5e-4360-991a-06b583b70ca6 /boot xfs defaults 0 0
+UUID=C691-93BD /boot/efi vfat umask=0077,shortname=winnt 0 2
+LABEL=MEPHI_DATA  /data/mephi-web  ext4  defaults  0  2
+
+
+=== 3.2. Управление сервисами и журналирование  ===
+
+[root@localhost ~]# systemctl start nginx
+[root@localhost ~]# systemctl enable nginx
+Created symlink /etc/systemd/system/multi-user.target.wants/nginx.service → /usr/lib/systemd/system/nginx.service.
+
+[root@localhost ~]# systemctl status nginx --no-pager
+● nginx.service - The nginx HTTP and reverse proxy server
+     Loaded: loaded (/usr/lib/systemd/system/nginx.service; enabled; preset: disabled)
+     Active: active (running) since Sat 2026-03-28 16:08:42 MSK; 5s ago
+   ...
+
+[root@localhost ~]# journalctl -u nginx --since "5 minutes ago" --no-pager > /tmp/nginx_recent_logs.txt
+[root@localhost ~]# cat /tmp/nginx_recent_logs.txt
+
+мар 28 16:08:42 mephi-2026.domain.local systemd[1]: Stopping nginx.service - The nginx HTTP and reverse proxy server...
+мар 28 16:08:42 mephi-2026.domain.local systemd[1]: nginx.service: Deactivated successfully.
+мар 28 16:08:42 mephi-2026.domain.local systemd[1]: Stopped nginx.service - The nginx HTTP and reverse proxy server.
+мар 28 16:08:42 mephi-2026.domain.local systemd[1]: Starting nginx.service - The nginx HTTP and reverse proxy server...
+мар 28 16:08:42 mephi-2026.domain.local nginx[3154]: nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+мар 28 16:08:42 mephi-2026.domain.local nginx[3154]: nginx: configuration file /etc/nginx/nginx.conf test is successful
+мар 28 16:08:42 mephi-2026.domain.local systemd[1]: Started nginx.service - The nginx HTTP and reverse proxy server.
+
+
+================================================================================
+=== РАЗДЕЛ 4. УПРАВЛЕНИЕ ДОСТУПОМ  ===
+================================================================================
+
+=== 4.1. Дискреционное управление доступом (DAC)  ===
+
+[root@localhost ~]# useradd -m mephi-admin
+[root@localhost ~]# echo "mephi-admin:P@ssw0rd2026" | chpasswd
+[root@localhost ~]# groupadd mephi-devs
+[root@localhost ~]# usermod -aG mephi-devs mephi-admin
+[root@localhost ~]# chown mephi-admin:mephi-devs /data/mephi-web
+[root@localhost ~]# chmod 2775 /data/mephi-web
+
+--- Проверка ---
+
+[root@localhost ~]# ls -ld /data/mephi-web
+drwxrwsr-x. 2 mephi-admin mephi-devs 4096 мар 28 16:07 /data/mephi-web
+
+[root@localhost ~]# id mephi-admin
+uid=1000(mephi-admin) gid=1000(mephi-admin) группы=1000(mephi-admin),1001(mephi-devs)
+
+[root@localhost ~]# stat /data/mephi-web
+  Файл: /data/mephi-web
+  Размер: 4096      	Блоков: 8          Блок В/В: 4096   каталог
+Устройство: 8/17	Инода: 2           Ссылки: 3
+Доступ: (2775/drwxrwsr-x)  Uid: ( 1000/mephi-admin)   Gid: ( 1001/mephi-devs)
+Контекст: system_u:object_r:httpd_sys_content_t:s0
+Доступ:        2026-03-28 16:08:48.464230935 +0300
+Модифицирован: 2026-03-28 16:07:56.886293913 +0300
+Изменён:       2026-03-28 16:07:56.886293913 +0300
+Создан:        2026-03-28 15:55:43.000000000 +0300
+
+[root@localhost ~]# getent group mephi-devs
+mephi-devs:x:1001:mephi-admin
+
+
+=== 4.2. Мандатное управление доступом (MAC) и Capabilities  ===
+
+--- SELinux ---
+
+[root@localhost ~]# getenforce
+Enforcing
+
+[root@localhost ~]# semanage fcontext -a -t httpd_sys_content_t "/data/mephi-web(/.*)?"
+[root@localhost ~]# restorecon -Rv /data/mephi-web
+Relabeled /data/mephi-web from system_u:object_r:default_t:s0 to system_u:object_r:httpd_sys_content_t:s0
+
+[root@localhost ~]# ls -Zd /data/mephi-web
+system_u:object_r:httpd_sys_content_t:s0 /data/mephi-web
+
+--- Capabilities для tcpdump ---
+
+[root@localhost ~]# chmod u-s /usr/sbin/tcpdump
+[root@localhost ~]# setcap 'cap_net_raw,cap_net_admin+ep' /usr/sbin/tcpdump
+
+[root@localhost ~]# getcap /usr/sbin/tcpdump
+/usr/sbin/tcpdump cap_net_admin,cap_net_raw=ep
+
+[root@localhost ~]# sudo -u mephi-admin tcpdump --help 2>&1 | head -3
+tcpdump version 4.99.6
+libpcap version 1.10.5 (with TPACKET_V3)
+OpenSSL 3.2.4 11 Feb 2025
+
+
+================================================================================
+=== РАЗДЕЛ 5. АУТЕНТИФИКАЦИЯ И ИТОГОВАЯ ПРОВЕРКА  ===
+================================================================================
+
+=== 5.1. Ограничение входа для root  ===
+
+[root@localhost ~]# echo "root" > /etc/ssh/denied_users
+
+--- Настройка PAM для SSH ---
+
+[root@localhost ~]# if ! grep -q "pam_listfile.so.*denied_users" /etc/pam.d/sshd; then
+    sed -i '1 a auth    required    pam_listfile.so  onerr=succeed  item=user  sense=deny  file=/etc/ssh/denied_users' /etc/pam.d/sshd
+fi
+
+--- Запрет PermitRootLogin в sshd_config ---
+
+[root@localhost ~]# sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+[root@localhost ~]# systemctl restart sshd
+
+--- Настройка PAM для локальной консоли (login) ---
+
+[root@localhost ~]# if ! grep -q "pam_listfile.so.*denied_users" /etc/pam.d/login; then
+    sed -i '1 a auth    required    pam_listfile.so  onerr=succeed  item=user  sense=deny  file=/etc/ssh/denied_users' /etc/pam.d/login
+fi
+
+Результат: root не может войти ни через SSH, ни через локальную консоль.
+Остальные пользователи (включая mephi-admin) могут входить.
+
+
+=== 5.2. Тестирование настройки рабочей станции  ===
+
+=== 5.2.1. Создание персонифицированной страницы  ===
+
+[root@localhost ~]# sudo -u mephi-admin bash -c 'echo "Hello from Student: 370797" > /data/mephi-web/index.html'
+
+[root@localhost ~]# cat /data/mephi-web/index.html
+Hello from Student: 370797
+
+--- Настройка nginx для /data/mephi-web ---
+
+[root@localhost ~]# cat > /etc/nginx/conf.d/mephi-web.conf << 'NGINX_CONF'
+server {
+    listen       80;
+    server_name  localhost 192.168.1.100 mephi-2026.domain.local;
+
+    root /data/mephi-web;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+NGINX_CONF
+
+[root@localhost ~]# sed -i 's|root.*/usr/share/nginx/html;|root /data/mephi-web;|g' /etc/nginx/nginx.conf 2>/dev/null || true
+
+[root@localhost ~]# nginx -t
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+
+[root@localhost ~]# systemctl restart nginx
+[root@localhost ~]# restorecon -Rv /data/mephi-web
+
+
+=== 5.2.2. Итоговая проверка доступности  ===
+
+[root@localhost ~]# curl -s http://localhost
+Hello from Student: 370797
+
+[root@localhost ~]# curl -s http://192.168.1.100
+Hello from Student: 370797
+
+Результат: веб-сервер отдаёт страницу с корректным текстом по обоим адресам.
+
+
+================================================================================
+=== РАЗДЕЛ 6. ПУБЛИКАЦИЯ РЕЗУЛЬТАТОВ НА GITHUB ===
+================================================================================
+
+=== 6.1. Сбор артефактов ===
+
+[root@localhost ~]# ping -c 4 192.168.1.1 > ~/network_check.txt
+[root@localhost ~]# ping -c 4 8.8.8.8 >> ~/network_check.txt
+[root@localhost ~]# journalctl -u nginx --since "5 minutes ago" > ~/nginx_recent_logs.txt
+[root@localhost ~]# cp /etc/fstab ~/fstab.txt
+[root@localhost ~]# getenforce > ~/selinux_status.txt
+[root@localhost ~]# ls -Zd /data/mephi-web > ~/file_contexts.txt
+[root@localhost ~]# getcap /usr/sbin/tcpdump > ~/tcpdump_capabilities.txt
+[root@localhost ~]# stat /data/mephi-web > ~/permissions.txt
+[root@localhost ~]# id mephi-admin > ~/users_groups.txt
+[root@localhost ~]# getent group mephi-devs >> ~/users_groups.txt
+[root@localhost ~]# curl -s http://192.168.1.100 > ~/curl_output.txt
+[root@localhost ~]# history > ~/project_history.txt
+
+
+=== 6.2. Скриншот ===
+
+Скриншот сделан из терминала PuTTY (mephi-nginx-screenshot.PNG).
+На скриншоте видно:
+- Команда: curl -s http://localhost → Hello from Student: 370797
+- Команда: curl -s http://192.168.1.100 → Hello from Student: 370797
+- Конфигурация nginx с root /data/mephi-web
+
+
+=== ПОЛНАЯ ИСТОРИЯ КОМАНД (history) ===
+
+    1  nmcli connection show
+    2  nmcli connection modify enp0s3 ipv4.method manual
+    3  nmcli connection modify enp0s3 ipv4.method manual ipv4.addresses 192.168.1.100/24 ipv4.gateway 192.168.1.1 ipv4.dns 8.8.8.8
+    4  nmcli connection up enp0s3
+    5  echo "Статический IP настроен: 192.168.1.100/24"
+    6  hostnamectl set-hostname mephi-2026.domain.local
+    7  echo "Hostname установлен: $(hostnamectl --static)"
+    8  echo ""
+    9  echo ">>> РАЗДЕЛ 1.2: Проверка сетевой связности"
+   10  echo "Маршрут по умолчанию:"
+   11  ip route show default
+   12  ping -c 4 8.8.8.8 > /tmp/network_check.txt 2>&1 || true
+   13  ping -c 4 192.168.1.1 >> /tmp/network_check.txt 2>&1 || true
+   14  echo "Результаты сохранены в /tmp/network_check.txt"
+   15  cat /tmp/network_check.txt
+   16  echo ""
+   17  echo ">>> РАЗДЕЛ 2.1: Установка пакетов из репозиториев"
+   18  dnf install -y nginx tcpdump libcap-ng-utils
+   19  echo "Пакеты nginx, tcpdump, libcap-ng-utils установлены"
+   20  echo ""
+   21  echo ">>> РАЗДЕЛ 2.2: Установка локального RPM-пакета"
+   22  dnf download tcpdump --destdir=/tmp
+   23  TCPDUMP_RPM=$(ls /tmp/tcpdump-*.rpm 2>/dev/null | head -1)
+   24  echo "Скачан RPM: $TCPDUMP_RPM"
+   25  rpm -ivh --force "$TCPDUMP_RPM"
+   26  echo "RPM-пакет tcpdump установлен через rpm"
+   27  echo ""
+   28  echo ">>> РАЗДЕЛ 3.1: Создание и монтирование файловой системы"
+   29  echo -e "o\nn\np\n1\n\n\nw" | fdisk /dev/sdb
+   30  mkfs.ext4 -L MEPHI_DATA /dev/sdb1
+   31  mkdir -p /data/mephi-web
+   32  if ! grep -q "LABEL=MEPHI_DATA" /etc/fstab; then     echo "LABEL=MEPHI_DATA  /data/mephi-web  ext4  defaults  0  2" >> /etc/fstab; fi
+   33  mount -a
+   34  systemctl daemon-reload
+   35  df -h /data/mephi-web
+   36  echo ""
+   37  echo "Содержимое /etc/fstab:"
+   38  cat /etc/fstab
+   39  echo ""
+   40  echo ">>> РАЗДЕЛ 3.2: Управление сервисами и журналирование"
+   41  systemctl start nginx
+   42  systemctl enable nginx
+   43  echo "Статус nginx:"
+   44  systemctl status nginx --no-pager
+   45  journalctl -u nginx --since "5 minutes ago" --no-pager > /tmp/nginx_recent_logs.txt
+   46  echo "Логи nginx сохранены в /tmp/nginx_recent_logs.txt"
+   47  echo ""
+   48  echo ">>> РАЗДЕЛ 4.1: Дискреционное управление доступом (DAC)"
+   49  useradd -m mephi-admin 2>/dev/null || echo "Пользователь mephi-admin уже существует"
+   50  echo "mephi-admin:P@ssw0rd2026" | chpasswd
+   51  groupadd mephi-devs 2>/dev/null || echo "Группа mephi-devs уже существует"
+   52  usermod -aG mephi-devs mephi-admin
+   53  chown mephi-admin:mephi-devs /data/mephi-web
+   54  chmod 2775 /data/mephi-web
+   55  echo "Проверка прав:"
+   56  ls -ld /data/mephi-web
+   57  echo "Проверка пользователя:"
+   58  id mephi-admin
+   59  echo ""
+   60  echo ">>> РАЗДЕЛ 4.2: Мандатное управление доступом (MAC) и Capabilities"
+   61  echo "Текущий режим SELinux: $(getenforce)"
+   62  if [ "$(getenforce)" != "Enforcing" ]; then     setenforce 1;     sed -i 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config;     echo "SELinux переключён в Enforcing"; fi
+   63  semanage fcontext -a -t httpd_sys_content_t "/data/mephi-web(/.*)?"
+   64  restorecon -Rv /data/mephi-web
+   65  echo "SELinux-контекст установлен:"
+   66  ls -Zd /data/mephi-web
+   67  chmod u-s /usr/sbin/tcpdump
+   68  setcap 'cap_net_raw,cap_net_admin+ep' /usr/sbin/tcpdump
+   69  echo "Capabilities для tcpdump:"
+   70  getcap /usr/sbin/tcpdump
+   71  echo "Проверка запуска tcpdump от mephi-admin:"
+   72  sudo -u mephi-admin tcpdump --help 2>&1 | head -3
+   73  echo ""
+   74  echo ">>> РАЗДЕЛ 5.1: Ограничение входа для root"
+   75  echo "root" > /etc/ssh/denied_users
+   76  if ! grep -q "pam_listfile.so.*denied_users" /etc/pam.d/sshd; then     sed -i '1 a auth    required    pam_listfile.so  onerr=succeed  item=user  sense=deny  file=/etc/ssh/denied_users' /etc/pam.d/sshd; fi
+   77  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+   78  systemctl restart sshd
+   79  if ! grep -q "pam_listfile.so.*denied_users" /etc/pam.d/login; then     sed -i '1 a auth    required    pam_listfile.so  onerr=succeed  item=user  sense=deny  file=/etc/ssh/denied_users' /etc/pam.d/login; fi
+   80  echo "Root-логин заблокирован через PAM для SSH и локальной консоли"
+   81  echo ""
+   82  echo ">>> РАЗДЕЛ 5.2: Создание персонифицированной страницы"
+   83  sudo -u mephi-admin bash -c 'echo "Hello from Student: 370797" > /data/mephi-web/index.html'
+   84  echo "index.html создан:"
+   85  cat /data/mephi-web/index.html
+   86  cat > /etc/nginx/conf.d/mephi-web.conf << 'NGINX_CONF' ...
+   87  sed -i 's|root.*/usr/share/nginx/html;|root /data/mephi-web;|g' /etc/nginx/nginx.conf 2>/dev/null || true
+   88  nginx -t
+   89  systemctl restart nginx
+   90  restorecon -Rv /data/mephi-web
+   91  echo ">>> РАЗДЕЛ 5.2.2: Итоговая проверка доступности"
+   92  curl -s http://localhost
+   93  curl -s http://192.168.1.100
+   94  echo ">>> РАЗДЕЛ 6: Сбор артефактов"
+   95  cd ~
+   96  history > ~/project_history.txt
+
+
+=== СОДЕРЖИМОЕ АРТЕФАКТНЫХ ФАЙЛОВ ===
+
+--- selinux_status.txt ---
+Enforcing
+
+--- file_contexts.txt ---
+system_u:object_r:httpd_sys_content_t:s0 /data/mephi-web
+
+--- tcpdump_capabilities.txt ---
+/usr/sbin/tcpdump cap_net_admin,cap_net_raw=ep
+
+--- users_groups.txt ---
+uid=1000(mephi-admin) gid=1000(mephi-admin) группы=1000(mephi-admin),1001(mephi-devs)
+mephi-devs:x:1001:mephi-admin
+
+--- curl_output.txt ---
+Hello from Student: 370797
+
+--- index.html ---
+Hello from Student: 370797
+
+
+=== ФАЙЛЫ В РЕПОЗИТОРИИ GITHUB ===
+
+Файл                         Раздел  Что проверяется
+project_history.txt           Все     История всех команд
+network_check.txt             1.2     Результаты ping
+nginx_recent_logs.txt         3.2     Логи nginx
+fstab.txt                     3.1     Автомонтирование
+selinux_status.txt            4.2     Режим SELinux
+file_contexts.txt             4.2     Контекст SELinux
+tcpdump_capabilities.txt      4.2     Настройка capabilities
+permissions.txt               4.1     Права и владелец
+users_groups.txt              4.1     Пользователи и группы
+index.html                    5.2     Web-страница
+curl_output.txt               5.2     Результат тестирования
+mephi-nginx-screenshot.PNG    5.2     Визуальное подтверждение
+tcpdump-4.99.6-2.fc43.x86_64.rpm  2.2  RPM-пакет tcpdump
+
+
